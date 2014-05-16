@@ -1,0 +1,55 @@
+---
+
+- hosts: all
+  user: vagrant
+  sudo: True
+  vars:
+    package_cache_server: 10.10.10.10
+  tasks:
+  - name: install proxy file for apt
+    template: src=templates/01proxy.j2 dest=/etc/apt/apt.conf.d/01proxy
+
+  - name: install docker
+    apt: pkg=docker.io state=installed
+
+  # Add a line to a file if it does not exist, without passing regexp
+  - name: configure docker to listen on eth2 ipv4 address instead of a socket
+    lineinfile: dest=/etc/default/docker.io line="DOCKER_OPTS=\"-H tcp://{{ ansible_eth2.ipv4.address }}:4243\""
+    register: docker_host
+    notify: restart docker
+
+  - name: restart docker
+    service: name=docker.io state=restarted
+    when: docker_host.changed
+
+  - name: wait for docker on private ip port 4243
+    wait_for: port=4243 delay=15 host={{ ansible_eth2.ipv4.address }}
+
+  - name: check if .bashrc is setup for docker
+    shell: grep DOCKER_HOST /home/vagrant/.bashrc
+    register: docker_host_bashrc
+    changed_when: docker_host_bashrc > 0
+    ignore_errors: true
+
+  - name: add DOCKER_HOST to /home/vagrant/.bashrc
+    shell: echo "export DOCKER_HOST=tcp://{{ ansible_eth2.ipv4.address }}:4243" >> /home/vagrant/.bashrc
+    when: docker_host_bashrc.changed
+
+  - name: add DOCKER_HOST to /home/vagrant/.bashrc
+    shell: echo "alias docker='docker.io'" >> /home/vagrant/.bashrc
+    when: docker_host_bashrc.changed
+
+  - name: check if the debian:jessie image has been pulled
+    shell: "export DOCKER_HOST=tcp://{{ ansible_eth2.ipv4.address }}:4243 && docker.io images | grep jessie"
+    register: images_pulled
+    changed_when: images_pulled.rc > 0
+    ignore_errors: true
+
+  - name: pull debian:jessie image
+    shell: "export DOCKER_HOST=tcp://{{ ansible_eth2.ipv4.address }}:4243 && docker.io pull debian:jessie"
+    when: images_pulled.changed
+
+  handlers:
+
+  - name: restart docker
+    service: name=docker.io state=restarted 
